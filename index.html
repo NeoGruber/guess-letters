@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini Wordle</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background: #111;
+      color: white;
+      margin: 0;
+    }
+    .controls {
+      padding: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      background-color: #1a1a1a;
+    }
+    select, input[type=number], button {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      font-size: 1em;
+      background: #222;
+      color: white;
+    }
+    button {
+      cursor: pointer;
+      background: #444;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #666;
+    }
+    main {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    .game {
+      display: grid;
+      gap: 5px;
+    }
+    .row {
+      display: grid;
+      gap: 5px;
+    }
+    .tile {
+      width: 60px;
+      height: 60px;
+      border: 2px solid #444;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 2em;
+      text-transform: uppercase;
+      background: #222;
+    }
+    .correct { background: #538d4e; }
+    .present { background: #b59f3b; }
+    .absent  { background: #3a3a3c; }
+    #status {
+      margin-top: 20px;
+      margin-bottom: 20px;
+      padding: 10px 20px;
+      font-size: 1.2em;
+      border-radius: 5px;
+      min-height: 40px;
+      min-width: 200px;
+      text-align: center;
+      transition: background 0.3s;
+    }
+    .error { background: #b00020; }
+    .success { background: #2e7d32; }
+    .keyboard {
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 5px;
+      max-width: 600px;
+    }
+    .key {
+      padding: 10px;
+      background: #666;
+      border-radius: 4px;
+      text-align: center;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    .key.correct { background: #538d4e; }
+    .key.present { background: #b59f3b; }
+    .key.absent  { background: #3a3a3c; }
+  </style>
+</head>
+<body>
+  <form class="controls" onsubmit="initGame(); return false;">
+    <label>Language:
+      <select id="language">
+        <option value="en">English</option>
+        <option value="de">German</option>
+        <option value="fr">French</option>
+        <option value="it">Italian</option>
+        <option value="es">Spanish</option>
+      </select>
+    </label>
+    <label>Letters:
+      <input type="number" id="length" value="5" min="3" max="10">
+    </label>
+    <button id="startButton" type="submit" onclick="this.blur()">Configure</button>
+  </form>
+
+  <main>
+    <div class="game" id="board"></div>
+    <div id="status"></div>
+    <button id="restartButton">Restart</button>
+    <div class="keyboard" id="keyboard"></div>
+  </main>
+  <script>
+    let word = "";
+    let row = 0;
+    let col = 0;
+    let length = 5;
+    const maxRows = 6;
+    let dictionary = [];
+    const board = document.getElementById("board");
+    const status = document.getElementById("status");
+    const startButton = document.getElementById("startButton");
+    const keyboard = document.getElementById("keyboard");
+    const restartButton = document.getElementById("restartButton");
+    const langSelect = document.getElementById("language");
+    const lengthInput = document.getElementById("length");
+    const keys = "abcdefghijklmnopqrstuvwxyz".split("");
+    let errorTimeout = null;
+
+    function saveSettings() {
+      localStorage.setItem("wordle_language", langSelect.value);
+      localStorage.setItem("wordle_length", lengthInput.value);
+    }
+
+    function loadGame() {
+      const lang = localStorage.getItem("wordle_language");
+      const len = localStorage.getItem("wordle_length");
+      if (!lang) lang = "en";
+      if (!len) len = 5;
+
+      if (lang) langSelect.value = lang;
+      if (len) lengthInput.value = len;
+
+      initGame();
+    }
+
+    function updateKeyboardClass(letter, className) {
+      const key = document.querySelector(`.key[data-key='${letter}']`);
+      if (!key) return;
+      if (key.classList.contains("correct")) return;
+      if (className === "correct") {
+        key.classList.remove("present", "absent");
+        key.classList.add("correct");
+      } else if (className === "present" && !key.classList.contains("present")) {
+        key.classList.remove("absent");
+        key.classList.add("present");
+      } else if (className === "absent" && !key.classList.contains("present") && !key.classList.contains("correct")) {
+        key.classList.add("absent");
+      }
+    }
+
+    function renderKeyboard() {
+      keyboard.innerHTML = "";
+      keys.forEach(letter => {
+        const div = document.createElement("div");
+        div.className = "key";
+        div.textContent = letter;
+        div.dataset.key = letter;
+        keyboard.appendChild(div);
+      });
+    }
+
+    async function fetchDictionary(length, language) {
+      const res = await fetch(`https://random-word-api.herokuapp.com/all?lang=${language}`);
+      const allWords = await res.json();
+
+      const filteredWords = allWords
+        .filter(w => w.length === length && /^[a-zA-Z]+$/.test(w))
+        .map(w => w.toLowerCase());
+      
+      return filteredWords;
+    }
+
+    function getRandomWord(words) {
+        word = words[Math.floor(Math.random() * words.length)].toLowerCase();
+      return word;
+    }
+
+    function createBoard(length) {
+      board.innerHTML = "";
+      for (let i = 0; i < maxRows; i++) {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "row";
+        rowDiv.style.gridTemplateColumns = `repeat(${length}, 1fr)`;
+        for (let j = 0; j < length; j++) {
+          const tile = document.createElement("div");
+          tile.className = "tile";
+          rowDiv.appendChild(tile);
+        }
+        board.appendChild(rowDiv);
+      }
+    }
+
+    async function initGame() {
+      saveSettings();
+      row = 0;
+      col = 0;
+      length = parseInt(lengthInput.value);
+      const lang = langSelect.value;
+      dictionary = await fetchDictionary(length, lang);
+      word = getRandomWord(dictionary);
+      createBoard(length);
+      renderKeyboard();
+      status.textContent = "";
+      status.className = "";
+      restartButton.style.display = "none";
+      startButton.textContent = "Configure";
+      document.querySelector("main").focus();
+    }
+
+    restartButton.onclick = () => initGame();
+
+    document.addEventListener("keydown", function(e) {
+      if (!word || row >= maxRows) return;
+      const currentRow = document.querySelectorAll(`.row:nth-child(${row + 1}) .tile`);
+
+      if (e.key === "Backspace") {
+        if (col > 0) {
+          col--;
+          currentRow[col].textContent = "";
+        }
+      } else if (e.key === "Enter") {
+        if (col === length) {
+          const guess = Array.from(currentRow).map(t => t.textContent.toLowerCase()).join("");
+          status.className = "";
+
+          if (!dictionary.includes(guess)) {
+            status.textContent = "Not in dictionary";
+            status.classList.add("error");
+            clearTimeout(errorTimeout);
+            errorTimeout = setTimeout(() => {
+              status.textContent = "";
+              status.className = "";
+            }, 2000);
+            return;
+          }
+
+          const targetLetters = word.split("");
+          const guessLetters = guess.split("");
+
+          const colorMap = Array(length).fill("absent");
+          const letterCount = {};
+          for (const letter of targetLetters) {
+            letterCount[letter] = (letterCount[letter] || 0) + 1;
+          }
+
+          for (let i = 0; i < length; i++) {
+            if (guessLetters[i] === targetLetters[i]) {
+              colorMap[i] = "correct";
+              letterCount[guessLetters[i]]--;
+            }
+          }
+
+          for (let i = 0; i < length; i++) {
+            if (colorMap[i] === "correct") continue;
+            if (letterCount[guessLetters[i]] > 0) {
+              colorMap[i] = "present";
+              letterCount[guessLetters[i]]--;
+            }
+          }
+
+          for (let i = 0; i < length; i++) {
+            currentRow[i].classList.add(colorMap[i]);
+            updateKeyboardClass(guessLetters[i], colorMap[i]);
+          }
+
+          if (guess === word) {
+            status.textContent = "You win!";
+            status.classList.add("success");
+            restartButton.style.display = "block";
+            return;
+          } else {
+            row++;
+            col = 0;
+            if (row === maxRows) {
+              status.textContent = `Game Over! Word was: ${word}`;
+              status.classList.add("error");
+              restartButton.style.display = "block";
+            }
+          }
+        }
+      } else if (/^[a-zA-Z]$/.test(e.key)) {
+        if (col < length) {
+          currentRow[col].textContent = e.key.toUpperCase();
+          col++;
+        }
+      }
+    });
+
+    loadGame();
+  </script>
+</body>
+</html>
